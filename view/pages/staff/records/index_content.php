@@ -106,7 +106,7 @@
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Save Record</button>
+                    <button type="submit" class="btn btn-primary" id="recordSubmitBtn">Save Record</button>
                 </div>
             </form>
         </div>
@@ -128,6 +128,28 @@
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                 <button type="button" class="btn btn-danger" onclick="confirmDelete()">Delete</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+
+
+<!-- Map Modal -->
+<div class="modal fade" id="MapModal" tabindex="1" style="z-index: 2000;" aria-labelledby="MapModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="MapModalLabel">Grave Plot Map</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="card-body p-0">
+                <div id="map" style="height: calc(100vh - 250px); width: 100%;" class="mobile-map"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <!-- <button type="button" class="btn btn-danger" onclick="confirmMap()">Done</button> -->
+                <a href="map_content.php" id="viewMapRecord" class="btn btn-info">View Record</a>
             </div>
         </div>
     </div>
@@ -173,7 +195,10 @@
                     </div>
                     <div class="col-md-4">
                         <div class="small text-muted">Cemetery</div>
-                        <a href="" id="viewCemetery" class="btn btn-md btn-info fw-semibold">Grave Plot</a>
+                        <!-- <a href="" id="viewCemetery" class="btn btn-md btn-info fw-semibold">Grave Plot</a> -->
+                        <button class="btn btn-sm btn-info" onclick="mapRecord()" title="Map">
+                            <i class="fas fa-map"></i>
+                        </button>
                     </div>
                     <div class="col-12">
                         <div class="small text-muted">Notes</div>

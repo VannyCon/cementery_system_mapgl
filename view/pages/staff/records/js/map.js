@@ -3,25 +3,24 @@ class CemeteryManager {
     constructor() {
         this.authManager = new AuthManager();
         this.cemeteryAPI = this.authManager.API_CONFIG.baseURL + 'cemetery.php';
-        
         // Initialize drawing system
         this.draw = null;
         this.currentDrawingMode = null;
-        
         // Initialize modal manager (will be set after DOM loads)
         this.modalManager = null;
-        
-        // Initialize road manager (will be set after DOM loads)
-        this.roadManager = null;
-        
         // Initialize layer manager (will be set after DOM loads)
         this.layerManager = null;
+        // Initialize grave manager (will be set after DOM loads)
+        this.graveManager = null;
         
         this.initializeMap();
         this.initializeUI();
         this.initializeModalManager();
         this.initializeRoadManager();
+        this.initializeGraveManager();
         this.initializeLayerManager();
+
+        // this.loadData();
         // Don't load data immediately - wait for map to be ready
     }
 
@@ -29,26 +28,6 @@ class CemeteryManager {
         // Initialize MapLibre GL map
         this.map = new maplibregl.Map({
             container: 'map',
-            // style: {
-            //     version: 8,
-            //     sources: {
-            //         'osm': {
-            //             type: 'raster',
-            //             tiles: ['https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'],
-            //             tileSize: 256,
-            //             attribution: '&copy; OpenStreetMap contributors'
-            //         }
-            //     },
-            //     layers: [
-            //         {
-            //             id: 'osm',
-            //             type: 'raster',
-            //             source: 'osm',
-            //             minzoom: 0,
-            //             maxzoom: 18
-            //         }
-            //     ]
-            // },
             style: 'https://tiles.openfreemap.org/styles/bright',
             // pitch: 100,
             center: [123.3372456, 10.950055], // [lng, lat] for MapLibre GL
@@ -75,10 +54,8 @@ class CemeteryManager {
 
         // Initialize feature collections for different data types
         this.features = {
-            cemeteries: [],
-            roads: [],
-            gravePlots: [],
             annotations: [],
+            graves: [],
             routes: []
         };
 
@@ -105,6 +82,15 @@ class CemeteryManager {
 
         // Event handlers
         this.setupMapEventHandlers();
+
+        // Grave plot creation state
+        this.gravePlotCreation = {
+            active: false,
+            awaitingLocation: false,
+            selectedLocation: null, // {lat, lng}
+            marker: null,
+            drawFeatureId: null
+        };
     }
 
     initializeDrawControls() {
@@ -134,9 +120,9 @@ class CemeteryManager {
                 'type': 'fill',
                 'filter': ['all', ['==', 'active', 'true'], ['==', '$type', 'Polygon']],
                 'paint': {
-                    'fill-color': '#fbb03b',
-                    'fill-outline-color': '#fbb03b',
-                    'fill-opacity': 0.1
+                    'fill-color': '#d88af2',
+                    'fill-outline-color': '#ba1fed',
+                    'fill-opacity': 0.5
                 }
             },
             // Line inactive
@@ -194,12 +180,13 @@ class CemeteryManager {
             displayControlsDefault: false,
             controls: {
                 polygon: true,
-                line_string: true,
                 trash: true
             },
             styles: drawStyles
         });
 
+
+        
         // Add draw control to map
         this.map.addControl(this.draw, 'top-left');
 
@@ -208,8 +195,6 @@ class CemeteryManager {
         this.map.on('draw.update', (e) => this.handleDrawUpdate(e));
         this.map.on('draw.delete', (e) => this.handleDrawDelete(e));
         this.map.on('draw.selectionchange', (e) => this.handleDrawSelectionChange(e));
-
-        console.log('Mapbox GL Draw initialized successfully');
     }
 
     // Mapbox GL Draw event handlers
@@ -219,10 +204,12 @@ class CemeteryManager {
         
         features.forEach(feature => {
             if (feature.geometry.type === 'Polygon') {
-                this.handleAnnotationCreate(feature);
-            } else if (feature.geometry.type === 'LineString') {
-                this.handleRoadCreate(feature);
-            }
+                if (this.currentDrawingMode === 'grave_plot' && this.gravePlotCreation && this.gravePlotCreation.active) {
+                    this.finalizeGravePlotPolygon(feature);
+                } else {
+                    this.handleGraveCreate(feature);
+                }
+            } 
         });
     }
 
@@ -232,10 +219,8 @@ class CemeteryManager {
         
         features.forEach(feature => {
             if (feature.geometry.type === 'Polygon') {
-                this.handleAnnotationUpdate(feature);
-            } else if (feature.geometry.type === 'LineString') {
-                this.handleRoadUpdate(feature);
-            }
+                this.handleGraveUpdate(feature);
+            } 
         });
     }
 
@@ -245,10 +230,9 @@ class CemeteryManager {
         
         features.forEach(feature => {
             if (feature.geometry.type === 'Polygon') {
-                this.handleAnnotationDelete(feature);
-            } else if (feature.geometry.type === 'LineString') {
-                this.handleRoadDelete(feature);
-            }
+                this.handleGraveDelete(feature);
+            } 
+            
         });
     }
 
@@ -265,157 +249,16 @@ class CemeteryManager {
     }
 
     // Feature-specific handlers
-    handleAnnotationCreate(feature) {
-        console.log('Creating annotation:', feature);
-        if (this.layerManager) {
-            this.layerManager.handleAnnotationCreate(feature);
+    handleGraveCreate(feature) {
+        if (this.graveManager) {
+            this.hideAreaCalculation();
+            this.graveManager.handleGraveCreate(feature);
         } else {
-            console.warn('LayerManager not initialized yet');
-        }
-    }
-
-    handleRoadCreate(feature) {
-        console.log('Creating road:', feature);
-        // Show road modal for details
-        if (this.roadManager) {
-            this.roadManager.handleRoadCreate(feature);
-        } else {
-            console.warn('RoadManager not initialized yet');
-        }
-    }
-
-    handleAnnotationUpdate(feature) {
-        console.log('Updating annotation:', feature);
-        if (this.layerManager) {
-            this.layerManager.handleAnnotationUpdate(feature);
-        }
-    }
-
-    handleRoadUpdate(feature) {
-        console.log('Updating road:', feature);
-        if (this.roadManager) {
-            this.roadManager.handleRoadUpdate(feature);
-        }
-    }
-
-    handleAnnotationDelete(feature) {
-        console.log('Deleting annotation:', feature);
-        if (this.layerManager) {
-            this.layerManager.handleAnnotationDelete(feature);
-        }
-    }
-
-    handleRoadDelete(feature) {
-        console.log('Deleting road:', feature);
-        if (this.roadManager) {
-            this.roadManager.handleRoadDelete(feature);
-        }
-    }
-
-    showAreaCalculation(feature) {
-        if (this.layerManager) {
-            this.layerManager.showAreaCalculation(feature);
-        }
-    }
-
-    hideAreaCalculation() {
-        if (this.layerManager) {
-            this.layerManager.hideAreaCalculation();
+            console.warn('GraveManager not initialized yet');
         }
     }
 
 
-
-    // Start drawing mode with Mapbox GL Draw
-    startDrawMode(mode) {
-        if (!this.draw) {
-            console.error('Mapbox GL Draw not initialized');
-            return;
-        }
-
-        console.log('Starting draw mode:', mode);
-        
-        // Change the draw mode
-        this.draw.changeMode(mode);
-        
-        // Show instructions based on mode
-        if (mode === 'line_string') {
-            this.showToast('Click to start drawing a road. Double-click to finish.', 'info');
-        } else if (mode === 'polygon') {
-            this.showToast('Click to start drawing a polygon. Double-click to finish.', 'info');
-        }
-    }
-
-    // Stop drawing mode
-    stopDrawMode() {
-        if (!this.draw) return;
-        
-        this.draw.changeMode('simple_select');
-        this.currentDrawingMode = null;
-    }
-
-    // Show toast notification
-    showToast(message, type = 'info') {
-        // Create toast element
-        const toast = document.createElement('div');
-        toast.className = `toast align-items-center text-white bg-${type} border-0`;
-        toast.setAttribute('role', 'alert');
-        toast.setAttribute('aria-live', 'assertive');
-        toast.setAttribute('aria-atomic', 'true');
-        
-        toast.innerHTML = `
-            <div class="d-flex">
-                <div class="toast-body">
-                    ${message}
-                </div>
-                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
-            </div>
-        `;
-        
-        // Add to toast container
-        let toastContainer = document.getElementById('toast-container');
-        if (!toastContainer) {
-            toastContainer = document.createElement('div');
-            toastContainer.id = 'toast-container';
-            toastContainer.className = 'toast-container position-fixed top-0 end-0 p-3';
-            toastContainer.style.zIndex = '9999';
-            document.body.appendChild(toastContainer);
-        }
-        
-        toastContainer.appendChild(toast);
-        
-        // Initialize and show toast
-        const bsToast = new bootstrap.Toast(toast);
-        bsToast.show();
-        
-        // Remove toast element after it's hidden
-        toast.addEventListener('hidden.bs.toast', () => {
-            toast.remove();
-        });
-    }
-
-    // Clear the currently drawn feature from Mapbox GL Draw
-    clearDrawnFeature() {
-        if (this.draw) {
-            // Get all features and remove them
-            const features = this.draw.getAll();
-            if (features.features.length > 0) {
-                // Remove all features
-                features.features.forEach(feature => {
-                    this.draw.delete(feature.id);
-                });
-            }
-        }
-        
-        // Clear stored geometry
-        this.currentRoadGeometry = null;
-        this.currentAnnotationGeometry = null;
-        this.pendingRoad = null;
-        this.pendingAnnotation = null;
-        
-        // Hide area calculation
-        this.hideAreaCalculation();
-    }
 
     setupMapEventHandlers() {
         // Handle map clicks for drawing and routing
@@ -467,90 +310,224 @@ class CemeteryManager {
             
             this.routingMode = null;
         });
-
-        // Note: Feature-specific click handlers are set up in each render method
-        // (renderCemeteries, renderRoads, renderGravePlots, renderAnnotations)
     }
 
 
     initializeUI() {
         // Drawing buttons - now using Mapbox GL Draw
-        const btnAddRoad = document.getElementById('btnAddRoad');
         const btnAddGravePlot = document.getElementById('btnAddGravePlot');
-        const btnAddAnnotation = document.getElementById('btnAddAnnotation');
         
         console.log('Button elements found:', {
-            btnAddRoad: !!btnAddRoad,
-            btnAddGravePlot: !!btnAddGravePlot,
-            btnAddAnnotation: !!btnAddAnnotation
+            btnAddGravePlot: !!btnAddGravePlot
         });
         
-        if (btnAddRoad) {
-            btnAddRoad.addEventListener('click', () => {
-                console.log('Add Road button clicked');
-                this.currentDrawingMode = 'road';
-                this.startDrawMode('line_string');
-            });
-        } else {
-            console.warn('btnAddRoad element not found');
-        }
-
         if (btnAddGravePlot) {
             btnAddGravePlot.addEventListener('click', () => {
                 console.log('Add Grave Plot button clicked');
-                this.currentDrawingMode = 'grave_plot';
-                this.startDrawMode('polygon');
+                this.beginGravePlotCreation();
             });
         } else {
             console.warn('btnAddGravePlot element not found');
         }
-
-        if (btnAddAnnotation) {
-            btnAddAnnotation.addEventListener('click', () => {
-                console.log('Add Annotation button clicked');
-                this.currentDrawingMode = 'annotation';
-                this.startDrawMode('polygon');
-            });
-        } else {
-            console.warn('btnAddAnnotation element not found');
-        }
-
-        // Routing buttons
-        // document.getElementById('btnSetStart').addEventListener('click', () => {
-        //     this.routingMode = 'start';
-        //     this.setRouteInfo('Click near a road to set Start');
-        // });
-
-        // document.getElementById('btnSetEnd').addEventListener('click', () => {
-        //     this.routingMode = 'end';
-        //     this.setRouteInfo('Click near a road to set End');
-        // });
-
-        // document.getElementById('btnFindRoute').addEventListener('click', () => {
-        //     this.findRoute();
-        // });
-
-        // document.getElementById('btnClearRoute').addEventListener('click', () => {
-        //     this.clearRoute();
-        // });
-
-        // document.getElementById('btnUseMyLocation').addEventListener('click', () => {
-        //     this.useMyLocation();
-        // });
-
-        // document.getElementById('btnARNavigate').addEventListener('click', () => {
-        //     window.location.href = 'ar.html';
-        // });
-
+    
         document.getElementById('btnReload').addEventListener('click', () => {
             this.loadData();
         });
 
         // Form submissions
         this.setupFormHandlers();
+    }
+
+
+    showAreaCalculation(feature) {
+        if (this.layerManager) {
+            this.layerManager.showAreaCalculation(feature);
+        }
+    }
+
+    hideAreaCalculation() {
+        if (this.layerManager) {
+            this.layerManager.hideAreaCalculation();
+        }
+    }
+
+    startDrawMode(mode) {
+        if (!this.draw) {
+            console.error('Mapbox GL Draw not initialized');
+            return;
+        }
+
+        console.log('Starting draw mode:', mode);
         
-        // Tab interactions
-        this.setupTabInteractions();
+        // Change the draw mode
+        this.draw.changeMode(mode);
+        
+        // Show instructions based on mode
+        if (mode === 'line_string') {
+            this.showToast('Click to start drawing a road. Double-click to finish.', 'info');
+        } else if (mode === 'polygon') {
+            this.showToast('Click to start drawing a polygon. Double-click to finish.', 'info');
+        }
+    }
+
+    // Begin the two-step flow for grave plot creation
+    beginGravePlotCreation() {
+        if (!this.map) return;
+        this.currentDrawingMode = 'grave_plot';
+        this.gravePlotCreation.active = true;
+        this.gravePlotCreation.awaitingLocation = true;
+
+        // Clean previous state
+        if (this.gravePlotCreation.marker) {
+            this.gravePlotCreation.marker.remove();
+            this.gravePlotCreation.marker = null;
+        }
+        this.gravePlotCreation.selectedLocation = null;
+
+        const onMapClick = (e) => {
+            if (!this.gravePlotCreation.awaitingLocation) return;
+            this.map.off('click', onMapClick);
+            const { lng, lat } = e.lngLat;
+            this.gravePlotCreation.selectedLocation = { lat, lng };
+            this.gravePlotCreation.awaitingLocation = false;
+
+            const el = document.createElement('div');
+            el.style.width = '16px';
+            el.style.height = '16px';
+            el.style.borderRadius = '50%';
+            el.style.background = '#0d6efd';
+            el.style.border = '2px solid #fff';
+            el.style.boxShadow = '0 1px 3px rgba(0,0,0,0.3)';
+            this.gravePlotCreation.marker = new maplibregl.Marker({ element: el })
+                .setLngLat([lng, lat])
+                .addTo(this.map);
+
+            this.startDrawMode('polygon');
+            if (typeof CustomToast !== 'undefined') {
+                CustomToast.show('info','Now draw the grave boundary and double-click to finish');
+            }
+        };
+
+        this.map.on('click', onMapClick);
+        if (typeof CustomToast !== 'undefined') {
+            CustomToast.show('info','Click on the map to set the grave location');
+        }
+    }
+
+    // After polygon is drawn, populate modal and open it
+    finalizeGravePlotPolygon(feature) {
+        try {
+            const ringLngLat = (feature.geometry && feature.geometry.coordinates && feature.geometry.coordinates[0]) || [];
+            const ringLatLng = ringLngLat.map(c => [c[1], c[0]]);
+            if (ringLatLng.length >= 3) {
+                const first = ringLatLng[0];
+                const last = ringLatLng[ringLatLng.length - 1];
+                if (first[0] !== last[0] || first[1] !== last[1]) {
+                    ringLatLng.push([first[0], first[1]]);
+                }
+            }
+
+            const wkt = this.coordsToWKT(ringLatLng, 'POLYGON');
+            const boundaryInput = document.getElementById('gravePlotGeometry');
+            const coordsInput = document.getElementById('gravePlotCoordinates');
+            const locationInput = document.getElementById('graveLocation');
+            if (boundaryInput) boundaryInput.value = wkt;
+
+            // Choose location: use selectedLocation if inside polygon; otherwise centroid
+            let locationLatLng = this.gravePlotCreation.selectedLocation
+                ? [this.gravePlotCreation.selectedLocation.lat, this.gravePlotCreation.selectedLocation.lng]
+                : null;
+
+            const isInside = (pt, polygon) => {
+                if (!pt || !Array.isArray(polygon) || polygon.length < 3) return false;
+                const x = pt[1]; // lng
+                const y = pt[0]; // lat
+                let inside = false;
+                for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+                    const xi = polygon[i][1], yi = polygon[i][0];
+                    const xj = polygon[j][1], yj = polygon[j][0];
+                    const intersect = ((yi > y) !== (yj > y)) &&
+                        (x < (xj - xi) * (y - yi) / ((yj - yi) || 1e-12) + xi);
+                    if (intersect) inside = !inside;
+                }
+                return inside;
+            };
+
+            const centroid = (polygon) => {
+                let area = 0, cx = 0, cy = 0;
+                for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+                    const xi = polygon[i][1], yi = polygon[i][0];
+                    const xj = polygon[j][1], yj = polygon[j][0];
+                    const a = xi * yj - xj * yi;
+                    area += a;
+                    cx += (xi + xj) * a;
+                    cy += (yi + yj) * a;
+                }
+                area *= 0.5;
+                if (Math.abs(area) < 1e-12) {
+                    // fallback to average
+                    let sumLat = 0, sumLng = 0;
+                    for (const p of polygon) { sumLat += p[0]; sumLng += p[1]; }
+                    return [sumLat / polygon.length, sumLng / polygon.length];
+                }
+                cx = cx / (6 * area);
+                cy = cy / (6 * area);
+                // return [lat, lng]
+                return [cy, cx];
+            };
+
+            if (!locationLatLng || !isInside(locationLatLng, ringLatLng)) {
+                locationLatLng = centroid(ringLatLng);
+            }
+
+            // Set hidden and visible location as WKT POINT(lng lat)
+            const pointWkt = `POINT(${locationLatLng[1]} ${locationLatLng[0]})`;
+            if (coordsInput) coordsInput.value = pointWkt;
+            if (locationInput) locationInput.value = pointWkt;
+
+            const modalEl = document.getElementById('graveModal');
+            if (modalEl && typeof bootstrap !== 'undefined') {
+                // Disable dark backdrop to avoid black surround and ensure map remains visible
+                const modalInstance = new bootstrap.Modal(modalEl, { backdrop: false });
+                modalInstance.show();
+                // Resize map after modal closes to prevent WebGL black canvas artifacts
+                modalEl.addEventListener('hidden.bs.modal', () => {
+                    if (this.map && typeof this.map.resize === 'function') {
+                        this.map.resize();
+                    }
+                }, { once: true });
+            }
+
+            if (this.draw && typeof this.draw.changeMode === 'function') {
+                try { this.draw.changeMode('simple_select'); } catch (e) {}
+            }
+
+            this.gravePlotCreation.drawFeatureId = feature.id || null;
+        } catch (err) {
+            console.error('Failed to finalize grave plot polygon:', err);
+            if (typeof CustomToast !== 'undefined') {
+                CustomToast.show('danger','Failed to process polygon');
+            }
+        }
+    }
+
+    // Reset and cleanup
+    resetGravePlotCreation() {
+        this.currentDrawingMode = null;
+        if (this.gravePlotCreation.marker) {
+            this.gravePlotCreation.marker.remove();
+            this.gravePlotCreation.marker = null;
+        }
+        if (this.draw && this.gravePlotCreation.drawFeatureId) {
+            try { this.draw.delete(this.gravePlotCreation.drawFeatureId); } catch (e) {}
+        }
+        this.gravePlotCreation = {
+            active: false,
+            awaitingLocation: false,
+            selectedLocation: null,
+            marker: null,
+            drawFeatureId: null
+        };
     }
 
     initializeModalManager() {
@@ -579,6 +556,19 @@ class CemeteryManager {
         }
     }
 
+    initializeGraveManager() {
+        // Initialize road manager when grave manager class is available
+        if (typeof GraveManager !== 'undefined') {
+            this.graveManager = new GraveManager(this);
+            console.log('GraveManager initialized successfully');
+        } else {
+            // Retry after a short delay if grave manager is not yet loaded
+            setTimeout(() => {
+                this.initializeGraveManager();
+            }, 100);
+        }
+    }
+
     initializeLayerManager() {
         // Initialize layer manager when LayerManager class is available
         if (typeof LayerManager !== 'undefined') {
@@ -592,41 +582,6 @@ class CemeteryManager {
         }
     }
 
-    setupTabInteractions() {
-        // Handle tab switching to control interactive properties
-        const roadsTab = document.getElementById('roads-tab');
-        const annotationsTab = document.getElementById('annotations-tab');
-        
-        if (roadsTab) {
-            roadsTab.addEventListener('click', () => {
-                window.tabs = 'roads';
-                this.loadData();
-                this.updateLayerInteractivity();
-            });
-        }
-        
-        if (annotationsTab) {
-            annotationsTab.addEventListener('click', () => {
-                window.tabs = 'annotations';
-                this.loadData();
-                this.updateLayerInteractivity();
-            });
-        }
-    }
-
-    // Update layer interactivity based on current tab
-    updateLayerInteractivity() {
-        // Update road interactivity
-        if (this.roadManager) {
-            this.roadManager.updateRoadInteractivity();
-        }
-        
-        // Update annotation interactivity
-        if (this.layerManager) {
-            this.layerManager.updateAnnotationInteractivity();
-        }
-    }
-
 
     setupFormHandlers() {
         // Form handlers are now managed by ModalManager
@@ -637,8 +592,65 @@ class CemeteryManager {
                 await this.confirmDelete();
             });
         }
-    }
 
+        // Handle Grave Plot form submission (if present)
+        const graveForm = document.getElementById('gravePlotForm');
+        if (graveForm) {
+            graveForm.addEventListener('submit', async (evt) => {
+                evt.preventDefault();
+                try {
+                    const formData = new FormData(graveForm);
+                    const draftStr = sessionStorage.getItem('newRecordDraft');
+                    if (draftStr) {
+                        const draft = JSON.parse(draftStr); // was a string
+                        Object.entries(draft).forEach(([key, value]) => {
+                            formData.set(key, value ?? '');
+                        });
+                    }
+                    
+                    // Ensure action exists
+                    if (!formData.get('action')) {
+                        formData.append('action', 'createBurialRecord');
+                    }
+
+                    const resp = await axios.post(this.cemeteryAPI, formData, {
+                        headers: this.authManager.API_CONFIG.getFormHeaders()
+                    });
+
+                    const ok = resp && resp.data && resp.data.success;
+                    if (ok) {
+                        sessionStorage.removeItem('newRecordDraft');
+                        if (typeof CustomToast !== 'undefined') {
+                            CustomToast.show('success','Grave plot saved successfully');
+                        }
+                        // Close modal
+                        const modalEl = document.getElementById('graveModal');
+                        if (modalEl && typeof bootstrap !== 'undefined') {
+                            const inst = bootstrap.Modal.getInstance(modalEl) || new bootstrap.Modal(modalEl);
+                            inst.hide();
+                        }
+
+                        // Reset state and reload data
+                        this.resetGravePlotCreation();
+                        this.loadData();
+                        // Clear form fields
+                        graveForm.reset();
+                        window.location.href = 'index.php';
+                    } else {
+                        const msg = (resp && resp.data && resp.data.message) ? resp.data.message : 'Failed to save grave plot';
+                        if (typeof CustomToast !== 'undefined') {
+                            CustomToast.show('danger', msg);
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error saving grave plot:', error);
+                    if (typeof CustomToast !== 'undefined') {
+                        CustomToast.show('danger','Error saving grave plot');
+                    }
+                }
+            });
+        }
+    }
 
     // Data Management
     async loadData() {
@@ -662,27 +674,26 @@ class CemeteryManager {
 
                 // Store cemetery data for later use in dropdowns
                 this.cemeteries = data.cemeteries || [];
+                
+                // Render grave plots
+                if (data.grave_plots) {
+                    this.renderGravePlots(data.grave_plots || []);
+                }
+                
                 // Render roads last so they appear on top
                 if (this.roadManager) {
                     this.roadManager.renderRoads(data.roads || []);
                 }
-                // Render layers in order (bottom to top)
-                this.renderCemeteries(data.cemeteries || []);
-                // this.renderGravePlots(data.grave_plots || []);
-
-
-                
+                if (this.graveManager) {
+                    this.graveManager.renderGraves(data.graves || []);
+                }
                 // Store annotations data for editing
                 this.annotations = data.layer_annotations || [];
                 if (this.layerManager) {
                     this.layerManager.renderAnnotations(this.annotations);
                 }
                 
-
-                if (this.roadManager) {
-                    this.roadManager.buildGraphFromRoads(data.roads || []);
-                }
-                this.updateTables(data);
+                // this.updateTables(data);
                 
                 // Fit bounds if any data exists
                 setTimeout(() => {
@@ -708,8 +719,6 @@ class CemeteryManager {
     clearLayers() {
         // Remove all custom layers and sources
         const layersToRemove = [
-            'cemeteries', 
-            'roads', 
             'grave-plots-polygon', 
             'grave-plots-polygon-stroke', 
             'grave-plots-point',
@@ -724,7 +733,7 @@ class CemeteryManager {
         });
         
         // Remove sources (these have different IDs than layers)
-        const sourcesToRemove = ['cemeteries', 'roads', 'grave-plots', 'annotations', 'routes'];
+        const sourcesToRemove = ['cemeteries', 'roads', 'graves', 'grave-plots', 'annotations', 'routes'];
         sourcesToRemove.forEach(sourceId => {
             if (this.map.getSource(sourceId)) {
                 this.map.removeSource(sourceId);
@@ -733,9 +742,7 @@ class CemeteryManager {
         
         // Clear feature collections
         this.features = {
-            cemeteries: [],
-            roads: [],
-            gravePlots: [],
+            graves: [],
             annotations: [],
             routes: []
         };
@@ -824,91 +831,6 @@ class CemeteryManager {
         }
         return null;
     }
-
-    renderCemeteries(cemeteries) {
-        // Check if map is loaded before proceeding
-        if (!this.map) {
-            console.warn('Map not initialized for rendering cemeteries');
-            return;
-        }
-
-        if (!this.map.isStyleLoaded()) {
-            console.warn('Map style not ready for rendering cemeteries, retrying in 100ms...');
-            setTimeout(() => {
-                this.renderCemeteries(cemeteries);
-            }, 100);
-            return;
-        }
-
-        const features = cemeteries.map(cemetery => {
-            const lat = parseFloat(cemetery.latitude);
-            const lng = parseFloat(cemetery.longitude);
-            
-            if (this.isValidLatLng(lat, lng)) {
-                return {
-                    type: 'Feature',
-                    geometry: {
-                        type: 'Point',
-                        coordinates: [lng, lat]
-                    },
-                    properties: {
-                        id: cemetery.id,
-                        name: cemetery.name,
-                        description: cemetery.description || '',
-                        photo_path: cemetery.photo_path || '',
-                        type: 'cemetery'
-                    }
-                };
-            }
-            return null;
-        }).filter(Boolean);
-
-        this.features.cemeteries = features;
-
-        // Add source and layer for cemeteries
-        if (features.length > 0) {
-            // Check if source already exists and remove it first
-            if (this.map.getSource('cemeteries')) {
-                this.map.removeSource('cemeteries');
-            }
-            
-            this.map.addSource('cemeteries', {
-                type: 'geojson',
-                data: {
-                    type: 'FeatureCollection',
-                    features: features
-                }
-            });
-
-            this.map.addLayer({
-                id: 'cemeteries',
-                type: 'circle',
-                source: 'cemeteries',
-                paint: {
-                    'circle-radius': 8,
-                    'circle-color': '#dc3545',
-                    'circle-stroke-color': '#ffffff',
-                    'circle-stroke-width': 2
-                }
-            });
-
-            // Add click handler for cemeteries
-            this.map.on('click', 'cemeteries', (e) => {
-                const feature = e.features[0];
-                this.showCemeteryPopup(feature, e.lngLat);
-            });
-
-            // Change cursor on hover
-            this.map.on('mouseenter', 'cemeteries', () => {
-                this.map.getCanvas().style.cursor = 'pointer';
-            });
-
-            this.map.on('mouseleave', 'cemeteries', () => {
-                this.map.getCanvas().style.cursor = '';
-            });
-        }
-    }
-
     showCemeteryPopup(feature, lngLat) {
         const cemetery = feature.properties;
                 const photoHtml = cemetery.photo_path ? 
@@ -1035,7 +957,7 @@ class CemeteryManager {
                     filter: ['==', ['geometry-type'], 'Polygon'],
                     paint: {
                         'fill-color': ['get', 'color'],
-                        'fill-opacity': 0.9
+                        'fill-opacity': 0.7
                     }
                 });
 
@@ -1047,7 +969,7 @@ class CemeteryManager {
                     paint: {
                         'line-color': ['get', 'color'],
                         'line-width': 2,
-                        'line-opacity': 0.9
+                        'line-opacity': 0.8
                     }
                 });
             }
@@ -1065,7 +987,7 @@ class CemeteryManager {
                         'circle-color': ['get', 'color'],
                         'circle-stroke-color': '#ffffff',
                         'circle-stroke-width': 2,
-                        'circle-opacity': 0.9
+                        'circle-opacity': 0.7
                     }
                 });
             }
@@ -1145,227 +1067,6 @@ class CemeteryManager {
             console.error('Error parsing WKT:', error, wkt);
             return null;
         }
-    }
-
-    // Save Functions
-    async saveCemetery() {
-        try {
-            const formData = new FormData(document.getElementById('cemeteryForm'));
-            const response = await axios.post(this.cemeteryAPI, formData, {
-                headers: this.authManager.API_CONFIG.getFormHeaders()
-            });
-            
-            if (response.data.success) {
-                bootstrap.Modal.getInstance(document.getElementById('cemeteryModal')).hide();
-                CustomToast.show('success','Cemetery saved successfully');
-                this.loadData();
-            } else {
-                CustomToast.show('danger',response.data.message || 'Failed to save cemetery');
-            }
-        } catch (error) {
-            console.error('Error saving cemetery:', error);
-            if (error.response && error.response.status === 401) {
-                CustomToast.show("danger","Authentication Error", "Please login again");
-                // Redirect to login page
-                window.location.href = '../../auth/login.php';
-            } else {
-                CustomToast.show('danger','Error saving cemetery');
-            }
-        }
-    }
-
-    async saveRoad() {
-        try {
-            const formData = new FormData(document.getElementById('roadForm'));
-            
-            // If we have geometry from Mapbox GL Draw, use it and remove the old coordinates
-            if (this.currentRoadGeometry) {
-                // Remove the old coordinates field to avoid constraint violation
-                formData.delete('coordinates');
-                // Set the WKT geometry
-                formData.set('geometry', this.currentRoadGeometry);
-                
-                console.log('Sending road with WKT geometry:', this.currentRoadGeometry);
-            } else if (this.pendingRoadCoords) {
-                // Fallback to JSON coordinates if no WKT geometry
-                formData.set('coordinates', JSON.stringify(this.pendingRoadCoords));
-                console.log('Sending road with JSON coordinates:', this.pendingRoadCoords);
-            }
-            
-            // Debug: Log what we're sending
-            console.log('Form data being sent:');
-            for (let [key, value] of formData.entries()) {
-                console.log(`${key}:`, value);
-            }
-            
-            const response = await axios.post(this.cemeteryAPI, formData, {
-                headers: this.authManager.API_CONFIG.getFormHeaders()
-            });
-            
-            if (response.data.success) {
-                bootstrap.Modal.getInstance(document.getElementById('roadModal')).hide();
-                CustomToast.show('success','Road saved successfully');
-
-                // Clear the drawn feature from Mapbox GL Draw
-                this.clearDrawnFeature();
-                
-                this.loadData();
-            } else {
-                CustomToast.show('danger',response.data.message || 'Failed to save road');
-            }
-        } catch (error) {
-            console.error('Error saving road:', error);
-            if (error.response && error.response.status === 401) {
-                CustomToast.show("danger","Authentication Error", "Please login again");
-                // Redirect to login page
-                window.location.href = '../../auth/login.php';
-            } else {
-                CustomToast.show('danger','Error saving road');
-            }
-        }
-    }
-
-    async saveBurialRecord() {
-        try {
-            const formData = new FormData(document.getElementById('burialForm'));
-            const response = await axios.post(this.cemeteryAPI, formData, {
-                headers: this.authManager.API_CONFIG.getFormHeaders()
-            });
-            
-            if (response.data.success) {
-                bootstrap.Modal.getInstance(document.getElementById('burialModal')).hide();
-                CustomToast.show('success','Burial record saved successfully');
-                this.loadData();
-            } else {
-                CustomToast.show('danger',response.data.message || 'Failed to save burial record');
-            }
-        } catch (error) {
-            console.error('Error saving burial record:', error);
-            if (error.response && error.response.status === 401) {
-                CustomToast.show("danger","Authentication Error", "Please login again");
-                // Redirect to login page
-                window.location.href = '../../auth/login.php';
-            } else {
-                CustomToast.show('danger','Error saving burial record');
-            }
-        }
-    }
-
-    async saveGravePlot() {
-        try {
-            const formData = new FormData(document.getElementById('plotForm'));
-            const response = await axios.post(this.cemeteryAPI, formData, {
-                headers: this.authManager.API_CONFIG.getFormHeaders()
-            });
-            
-            if (response.data.success) {
-                bootstrap.Modal.getInstance(document.getElementById('plotModal')).hide();
-                CustomToast.show('success','Grave plot saved successfully');
-                this.loadData();
-            } else {
-                CustomToast.show('danger',response.data.message || 'Failed to save grave plot');
-            }
-        } catch (error) {
-            console.error('Error saving grave plot:', error);
-            if (error.response && error.response.status === 401) {
-                CustomToast.show("danger","Authentication Error", "Please login again");
-                // Redirect to login page
-                window.location.href = '../../auth/login.php';
-            } else {
-                CustomToast.show('danger','Error saving grave plot');
-            }
-        }
-    }
-
-    async saveAnnotation() {
-        try {
-            const formData = new FormData(document.getElementById('annotationForm'));
-            
-            // Get geometry from drawing
-            if (this.currentAnnotationGeometry) {
-                formData.set('geometry', this.currentAnnotationGeometry);
-            }
-
-            // Handle checkbox values
-            formData.set('is_visible', document.getElementById('annotationVisible').checked ? '1' : '0');
-            formData.set('is_active', document.getElementById('annotationActive').checked ? '1' : '0');
-            
-            const response = await axios.post(this.cemeteryAPI, formData, {
-                headers: this.authManager.API_CONFIG.getFormHeaders()
-            });
-            
-            if (response.data.success) {
-                bootstrap.Modal.getInstance(document.getElementById('annotationModal')).hide();
-                CustomToast.show('success','Annotation saved successfully');
-                
-                // Clear the drawn feature from Mapbox GL Draw
-                this.clearDrawnFeature();
-                
-                this.loadData();
-            } else {
-                CustomToast.show('danger',response.data.message || 'Failed to save annotation');
-            }
-        } catch (error) {
-            console.error('Error saving annotation:', error);
-            if (error.response && error.response.status === 401) {
-                CustomToast.show("danger","Authentication Error", "Please login again");
-                // Redirect to login page
-                window.location.href = '../../auth/login.php';
-            } else {
-                CustomToast.show('danger','Error saving annotation');
-            }
-        }
-    }
-
-    // Layer Management Methods
-    async toggleAnnotationVisibility(id) {
-        try {
-            const formData = new FormData();
-            formData.set('action', 'toggleAnnotationVisibility');
-            formData.set('id', id);
-
-            const response = await axios.post(this.cemeteryAPI, formData, {
-                headers: this.authManager.API_CONFIG.getFormHeaders()
-            });
-
-            if (response.data.success) {
-                CustomToast.show('success','Annotation visibility updated');
-                this.loadData();
-            } else {
-                CustomToast.show('danger',response.data.message || 'Failed to update visibility');
-            }
-        } catch (error) {
-            console.error('Error toggling annotation visibility:', error);
-            CustomToast.show('danger','Failed to update annotation visibility');
-        }
-    }
-
-    async updateAnnotationSortOrder(id, sortOrder) {
-        try {
-            const formData = new FormData();
-            formData.set('action', 'updateAnnotationSortOrder');
-            formData.set('id', id);
-            formData.set('sort_order', sortOrder);
-
-            const response = await axios.post(this.cemeteryAPI, formData, {
-                headers: this.authManager.API_CONFIG.getFormHeaders()
-            });
-
-            if (response.data.success) {
-                CustomToast.show('success','Sort order updated');
-                this.loadData();
-            } else {
-                CustomToast.show('danger',response.data.message || 'Failed to update sort order');
-            }
-        } catch (error) {
-            console.error('Error updating sort order:', error);
-            CustomToast.show('danger','Failed to update sort order');
-        }
-    }
-
-    async refreshAnnotations() {
-        CustomToast.show('info','Refreshing annotations...');
-        await this.loadData();
     }
 
 
@@ -1549,6 +1250,48 @@ class CemeteryManager {
         return { pathIds, pathCoords, distanceMeters: dist[targetId] };
     }
 
+    
+    deleteGravePlot(id) {
+        this.confirmDeleteAction = () => this.performDelete('deleteGravePlot', id);
+        new bootstrap.Modal(document.getElementById('deleteModal')).show();
+    }
+
+    async confirmDelete() {
+        if (this.confirmDeleteAction) {
+            await this.confirmDeleteAction();
+            bootstrap.Modal.getInstance(document.getElementById('deleteModal')).hide();
+        }
+    }
+
+    async performDelete(action, id) {
+        try {
+            const formData = new FormData();
+            formData.append('action', action);
+            formData.append('id', id);
+            
+            const response = await axios.post(this.cemeteryAPI, formData, {
+                headers: this.authManager.API_CONFIG.getFormHeaders()
+            });
+            
+            if (response.data.success) {
+                CustomToast.show('success','Item deleted successfully');
+                this.loadData();
+            } else {
+              CustomToast.show('danger',response.data.message || 'Failed to delete item');
+            }
+        } catch (error) {
+            console.error('Error deleting item:', error);
+            if (error.response && error.response.status === 401) {
+              CustomToast.show("danger","Authentication Error", "Please login again");
+                // Redirect to login page
+                window.location.href = '../../auth/login.php';
+            } else {
+              CustomToast.show('danger','Error deleting item');
+            }
+        }
+    }
+
+
     renderRoute(coords, distanceMeters) {
         // Clear existing route
         if (this.map.getLayer('route')) {
@@ -1590,7 +1333,7 @@ class CemeteryManager {
             paint: {
                 'line-color': '#dc3545',
                 'line-width': 5,
-                'line-opacity': 1
+                'line-opacity': 0.9
             }
         });
         
@@ -2169,271 +1912,6 @@ class CemeteryManager {
             return `LINESTRING(${line})`;
         }
         return '';
-    }
-
-    populateCemeterySelect(selectId) {
-        const select = document.getElementById(selectId);
-        if (!select) {
-            console.warn(`Select element with id '${selectId}' not found`);
-            return;
-        }
-        
-        // Clear existing options
-        select.innerHTML = '<option value="">Select Cemetery</option>';
-        
-        // Populate with cemetery data if available
-        if (this.cemeteries && this.cemeteries.length > 0) {
-            this.cemeteries.forEach(cemetery => {
-                const option = document.createElement('option');
-                option.value = cemetery.id;
-                option.textContent = cemetery.name;
-                select.appendChild(option);
-            });
-        } else {
-            // If no cemeteries loaded yet, try to load them only once
-            if (!this.cemeteries && !this.isLoadingCemeteries) {
-                console.log('No cemetery data available, attempting to load...');
-                this.isLoadingCemeteries = true;
-                this.loadData().then(() => {
-                    this.isLoadingCemeteries = false;
-                    // Only call recursively if we now have data
-                    if (this.cemeteries && this.cemeteries.length > 0) {
-                        this.populateCemeterySelect(selectId);
-                    }
-                }).catch((error) => {
-                    this.isLoadingCemeteries = false;
-                    console.error('Failed to load cemetery data:', error);
-                });
-            }
-        }
-    }
-
-    updateTables(data) {
-        // this.updateCemeteriesTable(data.cemeteries || []);
-        this.updateRoadsTable(data.roads || []);
-        this.updatePlotsTable(data.grave_plots || []);
-        this.updateAnnotationsTable(data.layer_annotations || []);
-    }
-
-    // updateCemeteriesTable(cemeteries) {
-    //     const tbody = document.getElementById('cemeteriesTableBody');
-    //     tbody.innerHTML = cemeteries.map(cemetery => `
-    //         <tr>
-    //             <td>${this.escapeHtml(cemetery.name)}</td>
-    //             <td>${this.escapeHtml(cemetery.description || '')}</td>
-    //             <td>${cemetery.latitude}, ${cemetery.longitude}</td>
-    //             <td>${new Date(cemetery.created_at).toLocaleDateString()}</td>
-    //             <td>
-    //                 <button class="btn btn-sm btn-primary" onclick="cemeteryManager.editCemetery(${cemetery.id})">
-    //                     <i class="fas fa-edit"></i>
-    //                 </button>
-    //                 <button class="btn btn-sm btn-danger" onclick="cemeteryManager.deleteCemetery(${cemetery.id})">
-    //                     <i class="fas fa-trash"></i>
-    //                 </button>
-    //             </td>
-    //         </tr>
-    //     `).join('');
-    // }
-
-    updateRoadsTable(roads) {
-        const tbody = document.getElementById('roadsTableBody');
-        tbody.innerHTML = roads.map(road => `
-            <tr>
-                <td>${this.escapeHtml(road.road_name)}</td>
-                <td>${road.geometry_type}</td>
-                <td>${new Date(road.created_at).toLocaleDateString()}</td>
-                <td>
-                    <button class="btn btn-sm btn-primary" onclick="cemeteryManager.editRoad(${road.id})">
-                        <i class="fas fa-edit"></i>
-                    </button>
-                    <button class="btn btn-sm btn-danger" onclick="cemeteryManager.deleteRoad(${road.id})">
-                        <i class="fas fa-trash"></i>
-                    </button>
-                </td>
-            </tr>
-        `).join('');
-    }
-
-    updatePlotsTable(plots) {
-        const tbody = document.getElementById('plotsTableBody');
-        tbody.innerHTML = plots.map(plot => `
-            <tr>
-                <td>${this.escapeHtml(plot.grave_number)}</td>
-                <td>${this.escapeHtml(plot.cemetery_name || 'Unknown')}</td>
-                <td><span class="badge bg-${plot.status === 'available' ? 'success' : plot.status === 'occupied' ? 'danger' : 'warning'}">${plot.status}</span></td>
-                <td>${this.escapeHtml(plot.notes || '')}</td>
-                <td>${new Date(plot.created_at).toLocaleDateString()}</td>
-                <td>
-                    <button class="btn btn-sm btn-primary" onclick="cemeteryManager.editGravePlot(${plot.id})">
-                        <i class="fas fa-edit"></i>
-                    </button>
-                    <button class="btn btn-sm btn-danger" onclick="cemeteryManager.deleteGravePlot(${plot.id})">
-                        <i class="fas fa-trash"></i>
-                    </button>
-                </td>
-            </tr>
-        `).join('');
-    }
-
-    updateAnnotationsTable(annotations) {
-        const tbody = document.getElementById('annotationsTableBody');
-        tbody.innerHTML = annotations.map(annotation => `
-            <tr class="${annotation.is_visible == 1 ? '' : 'table-secondary'}">
-                <td>${this.escapeHtml(annotation.label || 'Unnamed')}</td>
-                <td class="d-none d-sm-table-cell">
-                    <span style="display:inline-block;width:20px;height:20px;background-color:${annotation.color};border-radius:3px;"></span> 
-                    ${annotation.color}
-                </td>
-                <td class="d-none d-md-table-cell">${annotation.sort_order || 0}</td>
-                <td class="d-none d-md-table-cell">
-                    <span class="badge bg-${annotation.is_visible == 1 ? 'success' : 'secondary'}">${annotation.is_visible == 1 ? 'Visible' : 'Hidden'}</span>
-                    <span class="badge bg-${annotation.is_active == 1 ? 'primary' : 'warning'} ms-1">${annotation.is_active == 1 ? 'Active' : 'Inactive'}</span>
-                </td>
-                <td class="d-none d-lg-table-cell">${this.escapeHtml(annotation.notes || '')}</td>
-                <td class="d-none d-sm-table-cell">${new Date(annotation.created_at).toLocaleDateString()}</td>
-                <td>
-                    <div class="btn-group" role="group">
-                        <button class="btn btn-sm btn-primary" onclick="cemeteryManager.editAnnotation(${annotation.id})" title="Edit">
-                            <i class="fas fa-edit"></i>
-                        </button>
-                        <button class="btn btn-sm btn-${annotation.is_visible == 1 ? 'secondary' : 'success'}" 
-                                onclick="cemeteryManager.toggleAnnotationVisibility(${annotation.id})" 
-                                title="${annotation.is_visible == 1 ? 'Hide' : 'Show'}">
-                            <i class="fas fa-eye${annotation.is_visible == 1 ? '-slash' : ''}"></i>
-                        </button>
-                        <button class="btn btn-sm btn-danger" onclick="cemeteryManager.deleteAnnotation(${annotation.id})" title="Delete">
-                            <i class="fas fa-trash"></i>
-                        </button>
-                    </div>
-                </td>
-            </tr>
-        `).join('');
-    }
-
-    // Edit Functions (placeholders for now)
-    editCemetery(id) {
-        // Implementation for editing cemetery
-        console.log('Edit cemetery:', id);
-    }
-
-    editRoad(id) {
-        console.log('Edit road:', id);
-    }
-
-    editBurial(id) {
-        console.log('Edit burial:', id);
-    }
-
-    editGravePlot(id) {
-        console.log('Edit grave plot:', id);
-    }
-
-    editAnnotation(id) {
-        // Find the annotation data
-        const annotation = this.annotations?.find(a => a.id == id);
-        if (!annotation) {
-            CustomToast.show('danger','Annotation not found');
-            return;
-        }
-
-        // Populate the form with existing data
-        document.getElementById('annotationId').value = annotation.id;
-        document.getElementById('annotationLabel').value = annotation.label || '';
-        document.getElementById('annotationColor').value = annotation.color || '#FF0000';
-        document.getElementById('annotationNotes').value = annotation.notes || '';
-        document.getElementById('annotationSortOrder').value = annotation.sort_order || 0;
-        document.getElementById('annotationVisible').checked = annotation.is_visible == 1;
-        document.getElementById('annotationActive').checked = annotation.is_active == 1;
-        
-        // Update form action
-        document.querySelector('#annotationForm [name="action"]').value = 'updateLayerAnnotation';
-        
-        // Update modal title
-        document.getElementById('annotationModalLabel').textContent = 'Edit Annotation';
-        
-        // Show modal
-        new bootstrap.Modal(document.getElementById('annotationModal')).show();
-    }
-
-    // Delete Functions
-    deleteCemetery(id) {
-        this.confirmDeleteAction = () => this.performDelete('deleteCemetery', id);
-        new bootstrap.Modal(document.getElementById('deleteModal')).show();
-    }
-
-    deleteRoad(id) {
-        this.confirmDeleteAction = () => this.performDelete('deleteRoad', id);
-        new bootstrap.Modal(document.getElementById('deleteModal')).show();
-    }
-
-    deleteBurial(id) {
-        this.confirmDeleteAction = () => this.performDelete('deleteBurialRecord', id);
-        new bootstrap.Modal(document.getElementById('deleteModal')).show();
-    }
-
-    deleteGravePlot(id) {
-        this.confirmDeleteAction = () => this.performDelete('deleteGravePlot', id);
-        new bootstrap.Modal(document.getElementById('deleteModal')).show();
-    }
-
-    deleteAnnotation(id) {
-        this.confirmDeleteAction = () => this.performDelete('deleteLayerAnnotation', id);
-        new bootstrap.Modal(document.getElementById('deleteModal')).show();
-    }
-
-    async confirmDelete() {
-        if (this.confirmDeleteAction) {
-            await this.confirmDeleteAction();
-            bootstrap.Modal.getInstance(document.getElementById('deleteModal')).hide();
-        }
-    }
-
-    async performDelete(action, id) {
-        try {
-            const formData = new FormData();
-            formData.append('action', action);
-            formData.append('id', id);
-            
-            const response = await axios.post(this.cemeteryAPI, formData, {
-                headers: this.authManager.API_CONFIG.getFormHeaders()
-            });
-            
-            if (response.data.success) {
-                CustomToast.show('success','Item deleted successfully');
-                this.loadData();
-            } else {
-              CustomToast.show('danger',response.data.message || 'Failed to delete item');
-            }
-        } catch (error) {
-            console.error('Error deleting item:', error);
-            if (error.response && error.response.status === 401) {
-              CustomToast.show("danger","Authentication Error", "Please login again");
-                // Redirect to login page
-                window.location.href = '../../auth/login.php';
-            } else {
-              CustomToast.show('danger','Error deleting item');
-            }
-        }
-    }
-
-    showAlert(message, type = 'info') {
-        // Create a simple alert - you could enhance this with toast notifications
-        const alertDiv = document.createElement('div');
-        alertDiv.className = `alert alert-${type} alert-dismissible fade show position-fixed`;
-        alertDiv.style.top = '20px';
-        alertDiv.style.right = '20px';
-        alertDiv.style.zIndex = '9999';
-        alertDiv.innerHTML = `
-            ${message}
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-        `;
-        document.body.appendChild(alertDiv);
-        
-        setTimeout(() => {
-            if (alertDiv.parentNode) {
-                alertDiv.parentNode.removeChild(alertDiv);
-            }
-        }, 5000);
     }
 
     escapeHtml(str) {

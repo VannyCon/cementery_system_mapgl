@@ -173,6 +173,35 @@ function openAddModal() {
     document.getElementById('recordModalLabel').textContent = 'Add Record';
     document.getElementById('recordForm').reset();
     document.getElementById('recordId').value = '';
+    const submitBtn = document.getElementById('recordSubmitBtn');
+    if (submitBtn) {
+        submitBtn.textContent = 'Next';
+        submitBtn.type = 'button';
+        submitBtn.onclick = () => {
+            const form = document.getElementById('recordForm');
+            if (!form.checkValidity()) {
+                form.reportValidity();
+                return;
+            }
+            const formDataObj = {
+                grave_number: document.getElementById('graveNumber').value,
+                deceased_name: document.getElementById('deceasedName').value,
+                date_of_birth: document.getElementById('dateOfBirth').value,
+                date_of_death: document.getElementById('dateOfDeath').value,
+                burial_date: document.getElementById('burialDate').value,
+                next_of_kin: document.getElementById('nextOfKin').value,
+                contact_info: document.getElementById('contactInfo').value,
+                notes: document.getElementById('notes').value,
+            };
+            try {
+                sessionStorage.setItem('newRecordDraft', JSON.stringify(formDataObj));
+            } catch (e) {
+                // eslint-disable-next-line no-console
+                console.warn('Could not store form draft in sessionStorage', e);
+            }
+            window.location.href = 'map.php';
+        };
+    }
     const modal = new bootstrap.Modal(document.getElementById('recordModal'));
     modal.show();
 }
@@ -203,6 +232,12 @@ function editRecord(id) {
     document.getElementById('nextOfKin').value = record.next_of_kin || '';
     document.getElementById('contactInfo').value = record.contact_info || '';
     document.getElementById('notes').value = record.notes || '';
+    const submitBtn = document.getElementById('recordSubmitBtn');
+    if (submitBtn) {
+        submitBtn.textContent = 'Save Record';
+        submitBtn.type = 'submit';
+        submitBtn.onclick = null;
+    }
     const modal = new bootstrap.Modal(document.getElementById('recordModal'));
     modal.show();
 }
@@ -210,6 +245,14 @@ function editRecord(id) {
 function deleteRecord(id) {
     deleteId = id;
     const modal = new bootstrap.Modal(document.getElementById('deleteModal'));
+    modal.show();
+}
+
+function mapRecord() {
+    // const record = records.find(r => String(r.id) === String(id));
+    // if (!record) { CustomToast?.error('Error', 'Record not found'); return; }
+    const modal = new bootstrap.Modal(document.getElementById('MapModal'));
+    // document.getElementById('MapRecord').value = record.grave_number || '';
     modal.show();
 }
 

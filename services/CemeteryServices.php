@@ -273,6 +273,17 @@ class CemeteryServices extends config {
      */
     public function createBurialRecord($data) {
         try {
+            $this->beginTransaction();
+
+            $result = $this->createGravePlot($data);
+            if (!$result['success']) {
+				$this->rollback(); // important: rollback before returning
+				return [
+					'success' => false,
+					'message' => 'Failed to create burial record: ' . ($result['message'] ?? 'Unable to create grave plot')
+				];
+			}
+
             $query = "INSERT INTO tbl_burial_records 
                      (deceased_name, date_of_birth, date_of_death, burial_date, grave_number, 
                       grave_id_fk, next_of_kin, contact_info, notes) 
@@ -284,18 +295,19 @@ class CemeteryServices extends config {
                 $data['date_of_death'],
                 $data['burial_date'],
                 $data['grave_number'],
-                $data['grave_id_fk'],
+                $result['id'],
                 $data['next_of_kin'] ?? null,
                 $data['contact_info'] ?? null,
                 $data['notes'] ?? null
             ]);
-
+            $this->commit();
             return [
                 'success' => true,
                 'message' => 'Burial record created successfully',
                 'id' => $this->pdo->lastInsertId()
             ];
         } catch (PDOException $e) {
+            $this->rollback();
             error_log("Create burial record error: " . $e->getMessage());
             return [
                 'success' => false,
@@ -369,11 +381,14 @@ class CemeteryServices extends config {
      */
     public function getGravePlots() {
         try {
-            $query = "SELECT gp.id, gp.grave_number,
+            $query = "SELECT gp.id, 
+                             gp.grave_number,
                              ST_AsText(gp.location) as location,
                              gp.image_path,
                              gp.status,
-                             ST_AsText(gp.boundary) as boundary, gp.notes, gp.created_at,
+                             ST_AsText(gp.boundary) as boundary, 
+                             gp.notes, 
+                             gp.created_at
                       FROM tbl_grave_plots gp
                       ORDER BY gp.created_at DESC";
             $stmt = $this->pdo->prepare($query);

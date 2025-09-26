@@ -82,6 +82,15 @@ class CemeteryManager {
 
         // Event handlers
         this.setupMapEventHandlers();
+
+        // Grave plot creation state
+        this.gravePlotCreation = {
+            active: false,
+            awaitingLocation: false,
+            selectedLocation: null, // {lat, lng}
+            marker: null,
+            drawFeatureId: null
+        };
     }
 
     initializeDrawControls() {
@@ -195,7 +204,11 @@ class CemeteryManager {
         
         features.forEach(feature => {
             if (feature.geometry.type === 'Polygon') {
-                this.handleGraveCreate(feature);
+                if (this.currentDrawingMode === 'grave_plot' && this.gravePlotCreation && this.gravePlotCreation.active) {
+                    this.finalizeGravePlotPolygon(feature);
+                } else {
+                    this.handleGraveCreate(feature);
+                }
             } 
         });
     }
@@ -237,8 +250,8 @@ class CemeteryManager {
 
     // Feature-specific handlers
     handleGraveCreate(feature) {
-        console.log('Creating grave:', feature);
         if (this.graveManager) {
+            this.hideAreaCalculation();
             this.graveManager.handleGraveCreate(feature);
         } else {
             console.warn('GraveManager not initialized yet');
@@ -311,8 +324,7 @@ class CemeteryManager {
         if (btnAddGravePlot) {
             btnAddGravePlot.addEventListener('click', () => {
                 console.log('Add Grave Plot button clicked');
-                this.currentDrawingMode = 'grave_plot';
-                this.startDrawMode('polygon');
+                this.beginGravePlotCreation();
             });
         } else {
             console.warn('btnAddGravePlot element not found');
@@ -356,6 +368,166 @@ class CemeteryManager {
         } else if (mode === 'polygon') {
             this.showToast('Click to start drawing a polygon. Double-click to finish.', 'info');
         }
+    }
+
+    // Begin the two-step flow for grave plot creation
+    beginGravePlotCreation() {
+        if (!this.map) return;
+        this.currentDrawingMode = 'grave_plot';
+        this.gravePlotCreation.active = true;
+        this.gravePlotCreation.awaitingLocation = true;
+
+        // Clean previous state
+        if (this.gravePlotCreation.marker) {
+            this.gravePlotCreation.marker.remove();
+            this.gravePlotCreation.marker = null;
+        }
+        this.gravePlotCreation.selectedLocation = null;
+
+        const onMapClick = (e) => {
+            if (!this.gravePlotCreation.awaitingLocation) return;
+            this.map.off('click', onMapClick);
+            const { lng, lat } = e.lngLat;
+            this.gravePlotCreation.selectedLocation = { lat, lng };
+            this.gravePlotCreation.awaitingLocation = false;
+
+            const el = document.createElement('div');
+            el.style.width = '16px';
+            el.style.height = '16px';
+            el.style.borderRadius = '50%';
+            el.style.background = '#0d6efd';
+            el.style.border = '2px solid #fff';
+            el.style.boxShadow = '0 1px 3px rgba(0,0,0,0.3)';
+            this.gravePlotCreation.marker = new maplibregl.Marker({ element: el })
+                .setLngLat([lng, lat])
+                .addTo(this.map);
+
+            this.startDrawMode('polygon');
+            if (typeof CustomToast !== 'undefined') {
+                CustomToast.show('info','Now draw the grave boundary and double-click to finish');
+            }
+        };
+
+        this.map.on('click', onMapClick);
+        if (typeof CustomToast !== 'undefined') {
+            CustomToast.show('info','Click on the map to set the grave location');
+        }
+    }
+
+    // After polygon is drawn, populate modal and open it
+    finalizeGravePlotPolygon(feature) {
+        try {
+            const ringLngLat = (feature.geometry && feature.geometry.coordinates && feature.geometry.coordinates[0]) || [];
+            const ringLatLng = ringLngLat.map(c => [c[1], c[0]]);
+            if (ringLatLng.length >= 3) {
+                const first = ringLatLng[0];
+                const last = ringLatLng[ringLatLng.length - 1];
+                if (first[0] !== last[0] || first[1] !== last[1]) {
+                    ringLatLng.push([first[0], first[1]]);
+                }
+            }
+
+            const wkt = this.coordsToWKT(ringLatLng, 'POLYGON');
+            const boundaryInput = document.getElementById('gravePlotGeometry');
+            const coordsInput = document.getElementById('gravePlotCoordinates');
+            const locationInput = document.getElementById('graveLocation');
+            if (boundaryInput) boundaryInput.value = wkt;
+
+            // Choose location: use selectedLocation if inside polygon; otherwise centroid
+            let locationLatLng = this.gravePlotCreation.selectedLocation
+                ? [this.gravePlotCreation.selectedLocation.lat, this.gravePlotCreation.selectedLocation.lng]
+                : null;
+
+            const isInside = (pt, polygon) => {
+                if (!pt || !Array.isArray(polygon) || polygon.length < 3) return false;
+                const x = pt[1]; // lng
+                const y = pt[0]; // lat
+                let inside = false;
+                for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+                    const xi = polygon[i][1], yi = polygon[i][0];
+                    const xj = polygon[j][1], yj = polygon[j][0];
+                    const intersect = ((yi > y) !== (yj > y)) &&
+                        (x < (xj - xi) * (y - yi) / ((yj - yi) || 1e-12) + xi);
+                    if (intersect) inside = !inside;
+                }
+                return inside;
+            };
+
+            const centroid = (polygon) => {
+                let area = 0, cx = 0, cy = 0;
+                for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+                    const xi = polygon[i][1], yi = polygon[i][0];
+                    const xj = polygon[j][1], yj = polygon[j][0];
+                    const a = xi * yj - xj * yi;
+                    area += a;
+                    cx += (xi + xj) * a;
+                    cy += (yi + yj) * a;
+                }
+                area *= 0.5;
+                if (Math.abs(area) < 1e-12) {
+                    // fallback to average
+                    let sumLat = 0, sumLng = 0;
+                    for (const p of polygon) { sumLat += p[0]; sumLng += p[1]; }
+                    return [sumLat / polygon.length, sumLng / polygon.length];
+                }
+                cx = cx / (6 * area);
+                cy = cy / (6 * area);
+                // return [lat, lng]
+                return [cy, cx];
+            };
+
+            if (!locationLatLng || !isInside(locationLatLng, ringLatLng)) {
+                locationLatLng = centroid(ringLatLng);
+            }
+
+            // Set hidden and visible location as WKT POINT(lng lat)
+            const pointWkt = `POINT(${locationLatLng[1]} ${locationLatLng[0]})`;
+            if (coordsInput) coordsInput.value = pointWkt;
+            if (locationInput) locationInput.value = pointWkt;
+
+            const modalEl = document.getElementById('graveModal');
+            if (modalEl && typeof bootstrap !== 'undefined') {
+                // Disable dark backdrop to avoid black surround and ensure map remains visible
+                const modalInstance = new bootstrap.Modal(modalEl, { backdrop: false });
+                modalInstance.show();
+                // Resize map after modal closes to prevent WebGL black canvas artifacts
+                modalEl.addEventListener('hidden.bs.modal', () => {
+                    if (this.map && typeof this.map.resize === 'function') {
+                        this.map.resize();
+                    }
+                }, { once: true });
+            }
+
+            if (this.draw && typeof this.draw.changeMode === 'function') {
+                try { this.draw.changeMode('simple_select'); } catch (e) {}
+            }
+
+            this.gravePlotCreation.drawFeatureId = feature.id || null;
+        } catch (err) {
+            console.error('Failed to finalize grave plot polygon:', err);
+            if (typeof CustomToast !== 'undefined') {
+                CustomToast.show('danger','Failed to process polygon');
+            }
+        }
+    }
+
+    // Reset and cleanup
+    resetGravePlotCreation() {
+        this.currentDrawingMode = null;
+        if (this.gravePlotCreation.marker) {
+            this.gravePlotCreation.marker.remove();
+            this.gravePlotCreation.marker = null;
+        }
+        if (this.draw && this.gravePlotCreation.drawFeatureId) {
+            try { this.draw.delete(this.gravePlotCreation.drawFeatureId); } catch (e) {}
+        }
+        this.gravePlotCreation = {
+            active: false,
+            awaitingLocation: false,
+            selectedLocation: null,
+            marker: null,
+            drawFeatureId: null
+        };
     }
 
     initializeModalManager() {
@@ -420,6 +592,64 @@ class CemeteryManager {
                 await this.confirmDelete();
             });
         }
+
+        // Handle Grave Plot form submission (if present)
+        const graveForm = document.getElementById('gravePlotForm');
+        if (graveForm) {
+            graveForm.addEventListener('submit', async (evt) => {
+                evt.preventDefault();
+                try {
+                    const formData = new FormData(graveForm);
+                    const draftStr = sessionStorage.getItem('newRecordDraft');
+                    if (draftStr) {
+                        const draft = JSON.parse(draftStr); // was a string
+                        Object.entries(draft).forEach(([key, value]) => {
+                            formData.set(key, value ?? '');
+                        });
+                    }
+                    
+                    // Ensure action exists
+                    if (!formData.get('action')) {
+                        formData.append('action', 'createBurialRecord');
+                    }
+
+                    const resp = await axios.post(this.cemeteryAPI, formData, {
+                        headers: this.authManager.API_CONFIG.getFormHeaders()
+                    });
+
+                    const ok = resp && resp.data && resp.data.success;
+                    if (ok) {
+                        sessionStorage.removeItem('newRecordDraft');
+                        if (typeof CustomToast !== 'undefined') {
+                            CustomToast.show('success','Grave plot saved successfully');
+                        }
+                        // Close modal
+                        const modalEl = document.getElementById('graveModal');
+                        if (modalEl && typeof bootstrap !== 'undefined') {
+                            const inst = bootstrap.Modal.getInstance(modalEl) || new bootstrap.Modal(modalEl);
+                            inst.hide();
+                        }
+
+                        // Reset state and reload data
+                        this.resetGravePlotCreation();
+                        this.loadData();
+                        // Clear form fields
+                        graveForm.reset();
+                        window.location.href = 'index.php';
+                    } else {
+                        const msg = (resp && resp.data && resp.data.message) ? resp.data.message : 'Failed to save grave plot';
+                        if (typeof CustomToast !== 'undefined') {
+                            CustomToast.show('danger', msg);
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error saving grave plot:', error);
+                    if (typeof CustomToast !== 'undefined') {
+                        CustomToast.show('danger','Error saving grave plot');
+                    }
+                }
+            });
+        }
     }
 
     // Data Management
@@ -444,6 +674,12 @@ class CemeteryManager {
 
                 // Store cemetery data for later use in dropdowns
                 this.cemeteries = data.cemeteries || [];
+                
+                // Render grave plots
+                if (data.grave_plots) {
+                    this.renderGravePlots(data.grave_plots || []);
+                }
+                
                 // Render roads last so they appear on top
                 if (this.roadManager) {
                     this.roadManager.renderRoads(data.roads || []);
